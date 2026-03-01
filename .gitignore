@@ -1,0 +1,23 @@
+# python
+__pycache__/
+*.pyc
+
+# virtual env
+venv/
+.env/
+
+# checkpoints
+*.pth
+*.pt
+checkpoints/
+runs/
+
+# dataset
+data/
+*.zip
+
+# notebook
+.ipynb_checkpoints/
+
+# system
+.DS_Store
