@@ -5,6 +5,7 @@ from typing import Optional, Tuple, List, Dict
 
 import numpy as np
 from PIL import Image
+from PIL import ImageEnhance
 
 import torch
 from torch.utils.data import Dataset
@@ -53,6 +54,113 @@ class JointRandomHorizontalFlip:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
             if mask is not None:
                 mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
+        return img, mask
+
+class JointRandomAffine:
+    """Apply the same small affine transform to image and mask."""
+    def __init__(
+        self,
+        p: float = 0.5,
+        max_rotate: float = 8.0,
+        max_translate_ratio: float = 0.04,
+        min_scale: float = 0.95,
+        max_scale: float = 1.05,
+    ):
+        self.p = p
+        self.max_rotate = max_rotate
+        self.max_translate_ratio = max_translate_ratio
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+
+    def __call__(self, img: Image.Image, mask: Optional[Image.Image]):
+        if np.random.rand() >= self.p:
+            return img, mask
+
+        w, h = img.size
+        angle = float(np.random.uniform(-self.max_rotate, self.max_rotate))
+        scale = float(np.random.uniform(self.min_scale, self.max_scale))
+        tx = float(np.random.uniform(-self.max_translate_ratio, self.max_translate_ratio) * w)
+        ty = float(np.random.uniform(-self.max_translate_ratio, self.max_translate_ratio) * h)
+
+        # PIL.Image.rotate does not support `scale` across Pillow versions.
+        # Use generic affine matrix to keep compatibility.
+        rad = np.deg2rad(angle)
+        cos = float(np.cos(rad)) / scale
+        sin = float(np.sin(rad)) / scale
+
+        cx = (w - 1) * 0.5
+        cy = (h - 1) * 0.5
+
+        # output(x, y) -> input(a*x + b*y + c, d*x + e*y + f)
+        a = cos
+        b = sin
+        d = -sin
+        e = cos
+        c = cx - a * cx - b * cy - tx
+        f = cy - d * cx - e * cy - ty
+        coeffs = (a, b, c, d, e, f)
+
+        img = img.transform(
+            size=(w, h),
+            method=Image.AFFINE,
+            data=coeffs,
+            resample=Image.BILINEAR,
+            fillcolor=(0, 0, 0),
+        )
+        if mask is not None:
+            mask = mask.transform(
+                size=(w, h),
+                method=Image.AFFINE,
+                data=coeffs,
+                resample=Image.NEAREST,
+                fillcolor=0,
+            )
+
+        # img = img.rotate(
+        #     angle,
+        #     resample=Image.BILINEAR,
+        #     translate=(tx, ty),
+        #     scale=scale,
+        #     fillcolor=(0, 0, 0),
+        # )
+        # if mask is not None:
+        #     mask = mask.rotate(
+        #         angle,
+        #         resample=Image.NEAREST,
+        #         translate=(tx, ty),
+        #         scale=scale,
+        #         fillcolor=0,
+        #     )
+        return img, mask
+
+
+class JointColorJitter:
+    """Color jitter only for image, mask unchanged."""
+    def __init__(
+        self,
+        p: float = 0.5,
+        brightness: float = 0.15,
+        contrast: float = 0.15,
+        saturation: float = 0.15,
+    ):
+        self.p = p
+        self.brightness = brightness
+        self.contrast = contrast
+        self.saturation = saturation
+
+    def _factor(self, strength: float) -> float:
+        return float(np.random.uniform(max(0.0, 1 - strength), 1 + strength))
+
+    def __call__(self, img: Image.Image, mask: Optional[Image.Image]):
+        if np.random.rand() >= self.p:
+            return img, mask
+
+        if self.brightness > 0:
+            img = ImageEnhance.Brightness(img).enhance(self._factor(self.brightness))
+        if self.contrast > 0:
+            img = ImageEnhance.Contrast(img).enhance(self._factor(self.contrast))
+        if self.saturation > 0:
+            img = ImageEnhance.Color(img).enhance(self._factor(self.saturation))
         return img, mask
 
 

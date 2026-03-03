@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/mnt/disk1/szchen/PlayGround/repo/AI6126_project1/train.py", line 521, in <module>
+    main()
+  File "/mnt/disk1/szchen/PlayGround/repo/AI6126_project1/train.py", line 343, in main
+    "train/loss_step": float(loss.item()),
+                             ^^^^
+UnboundLocalError: cannot access local variable 'loss' where it is not associated with a value
