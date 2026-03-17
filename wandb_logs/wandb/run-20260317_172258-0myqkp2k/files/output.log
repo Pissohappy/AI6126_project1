@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "/mnt/disk1/szchen/PlayGround/repo/AI6126_project1/train.py", line 526, in <module>
+    main()
+  File "/mnt/disk1/szchen/PlayGround/repo/AI6126_project1/train.py", line 394, in main
+    out = model(imgs)
+          ^^^^^^^^^^^
+  File "/mnt/disk1/szchen/miniconda3/envs/playground/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/disk1/szchen/miniconda3/envs/playground/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/disk1/szchen/PlayGround/repo/AI6126_project1/src/model.py", line 180, in forward
+    y0 = self.up0(y1, x0)
+         ^^^^^^^^^^^^^^^^
+  File "/mnt/disk1/szchen/miniconda3/envs/playground/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/disk1/szchen/miniconda3/envs/playground/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/disk1/szchen/PlayGround/repo/AI6126_project1/src/model.py", line 75, in forward
+    x = torch.cat([skip, x], dim=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 768.00 MiB. GPU 0 has a total capacity of 139.81 GiB of which 220.38 MiB is free. Process 373410 has 128.46 GiB memory in use. Including non-PyTorch memory, this process has 11.12 GiB memory in use. Of the allocated memory 10.10 GiB is allocated by PyTorch, and 411.05 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

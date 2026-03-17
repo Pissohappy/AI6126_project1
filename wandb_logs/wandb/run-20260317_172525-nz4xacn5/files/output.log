@@ -1,0 +1,27 @@
+Epoch 001 | lr=0.000199923 | train_loss=2.3301 | val_f1=0.1241
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.1241)
+Epoch 002 | lr=0.000199693 | train_loss=1.8424 | val_f1=0.1557
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.1557)
+Epoch 003 | lr=0.00019931 | train_loss=1.5292 | val_f1=0.2360
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.2360)
+Epoch 004 | lr=0.000198775 | train_loss=1.3208 | val_f1=0.3279
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.3279)
+Epoch 005 | lr=0.000198088 | train_loss=1.1644 | val_f1=0.3955
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.3955)
+Epoch 006 | lr=0.000197251 | train_loss=1.0479 | val_f1=0.4172
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.4172)
+Epoch 007 | lr=0.000196264 | train_loss=0.9638 | val_f1=0.4460
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.4460)
+Epoch 008 | lr=0.00019513 | train_loss=0.9012 | val_f1=0.4754
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.4754)
+Epoch 009 | lr=0.00019385 | train_loss=0.8490 | val_f1=0.4407
+Epoch 010 | lr=0.000192426 | train_loss=0.8048 | val_f1=0.4893
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.4893)
+Epoch 011 | lr=0.00019086 | train_loss=0.7739 | val_f1=0.4831
+Epoch 012 | lr=0.000189155 | train_loss=0.7480 | val_f1=0.4784
+Epoch 013 | lr=0.000187313 | train_loss=0.7228 | val_f1=0.4914
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.4914)
+Epoch 014 | lr=0.000185338 | train_loss=0.6880 | val_f1=0.5104
+  Saved best checkpoint: checkpoints/best.pth (best_f1=0.5104)
+Epoch 015 | lr=0.000183231 | train_loss=0.6764 | val_f1=0.5082
+Epoch 016 | lr=0.000180997 | train_loss=0.6474 | val_f1=0.5068

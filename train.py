@@ -65,6 +65,10 @@ def _maybe_init_wandb(args, model, n_params: int):
     except Exception as e:
         raise RuntimeError("wandb 未安装，请先 pip install wandb") from e
 
+    # 设置 wandb 日志保存目录，避免与 wandb 包名冲突
+    os.makedirs("wandb_logs", exist_ok=True)
+    os.environ["WANDB_DIR"] = "wandb_logs"
+
     tags = [t.strip() for t in args.wandb_tags.split(",") if t.strip()] if args.wandb_tags else None
 
     run = wandb.init(
