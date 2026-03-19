@@ -205,5 +205,83 @@ class MiniUNet(nn.Module):
         return logits, aux
 
 
+class SRResBlock(nn.Module):
+    """SRResNet residual block."""
+    def __init__(self, channels: int):
+        super().__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.PReLU(num_parameters=channels),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+        )
+
+    def forward(self, x):
+        return x + self.body(x)
+
+
+class SRUpsampleBlock(nn.Module):
+    def __init__(self, channels: int, scale: int = 2):
+        super().__init__()
+        if scale not in (2, 4):
+            raise ValueError("SRUpsampleBlock only supports scale=2 or 4.")
+        out_ch = channels * (scale ** 2)
+        self.block = nn.Sequential(
+            nn.Conv2d(channels, out_ch, kernel_size=3, padding=1),
+            nn.PixelShuffle(scale),
+            nn.PReLU(num_parameters=channels),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class SRResNet(nn.Module):
+    """
+    Canonical SRResNet with optional upsampling stages.
+    For segmentation baseline, set upscale_factor=1 to keep output size unchanged.
+    """
+    def __init__(
+        self,
+        in_channels: int = 3,
+        out_channels: int = 19,
+        base_ch: int = 64,
+        num_blocks: int = 16,
+        upscale_factor: int = 1,
+    ):
+        super().__init__()
+
+        if upscale_factor not in (1, 2, 4, 8):
+            raise ValueError("upscale_factor must be one of {1, 2, 4, 8}.")
+
+        self.conv_input = nn.Sequential(
+            nn.Conv2d(in_channels, base_ch, kernel_size=9, padding=4),
+            nn.PReLU(num_parameters=base_ch),
+        )
+        self.residual = nn.Sequential(*[SRResBlock(base_ch) for _ in range(num_blocks)])
+        self.conv_mid = nn.Sequential(
+            nn.Conv2d(base_ch, base_ch, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(base_ch),
+        )
+
+        up_layers = []
+        scale = upscale_factor
+        while scale > 1:
+            up_layers.append(SRUpsampleBlock(base_ch, scale=2))
+            scale //= 2
+        self.upsample = nn.Sequential(*up_layers) if up_layers else nn.Identity()
+
+        self.conv_output = nn.Conv2d(base_ch, out_channels, kernel_size=9, padding=4)
+
+    def forward(self, x):
+        shallow = self.conv_input(x)
+        deep = self.residual(shallow)
+        deep = self.conv_mid(deep)
+        fused = shallow + deep
+        up = self.upsample(fused)
+        return self.conv_output(up)
+
+
 def count_params(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

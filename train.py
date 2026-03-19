@@ -21,7 +21,7 @@ from src.dataset import (
     JointColorJitter,
     ToTensorNormalize,
 )
-from src.model import MiniUNet, count_params
+from src.model import MiniUNet, SRResNet, count_params
 from src.metrics import f1_score_multiclass
 
 
@@ -293,6 +293,7 @@ def build_experiment_config(args):
     """Build a consistent experiment config from preset + CLI args."""
     presets = {
         "baseline": {
+            "model_arch": "miniunet",
             "model": {
                 "base_ch": 32,
                 "backbone": "plain",
@@ -300,6 +301,8 @@ def build_experiment_config(args):
                 "use_attention": False,
                 "use_context": False,
                 "use_aux_head": False,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
             },
             "training": {
                 "use_dice": False,
@@ -308,6 +311,7 @@ def build_experiment_config(args):
             },
         },
         "full_strong": {
+            "model_arch": "miniunet",
             "model": {
                 "base_ch": 32,
                 "backbone": "plain",
@@ -315,6 +319,8 @@ def build_experiment_config(args):
                 "use_attention": True,
                 "use_context": True,
                 "use_aux_head": True,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
             },
             "training": {
                 "use_dice": True,
@@ -323,6 +329,7 @@ def build_experiment_config(args):
             },
         },
         "baseline4": {
+            "model_arch": "miniunet",
             "model": {
                 "base_ch": 32,
                 "backbone": "residual",
@@ -330,6 +337,8 @@ def build_experiment_config(args):
                 "use_attention": True,
                 "use_context": True,
                 "use_aux_head": True,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
             },
             "training": {
                 "use_dice": True,
@@ -337,7 +346,26 @@ def build_experiment_config(args):
                 "use_focal": True,
             },
         },
+        "srresnet_baseline": {
+            "model_arch": "srresnet",
+            "model": {
+                "base_ch": 32,
+                "backbone": "plain",
+                "use_dsconv": False,
+                "use_attention": False,
+                "use_context": False,
+                "use_aux_head": False,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
+            },
+            "training": {
+                "use_dice": False,
+                "use_balanced_sampling": False,
+                "use_focal": False,
+            },
+        },
         "custom": {
+            "model_arch": args.model_arch,
             "model": {
                 "base_ch": 32,
                 "backbone": args.backbone,
@@ -345,6 +373,8 @@ def build_experiment_config(args):
                 "use_attention": args.use_attention,
                 "use_context": args.use_context,
                 "use_aux_head": args.use_aux_head,
+                "sr_num_blocks": args.sr_num_blocks,
+                "sr_upscale_factor": args.sr_upscale_factor,
             },
             "training": {
                 "use_dice": args.use_dice,
@@ -373,8 +403,9 @@ def main():
     parser.add_argument("--use_hflip", action="store_true")
     parser.add_argument("--use_affine", action="store_true")
     parser.add_argument("--use_color_jitter", action="store_true")
-    parser.add_argument("--scheduler", type=str, default="cosine", choices=["none", "cosine"])
+    parser.add_argument("--scheduler", type=str, default="cosine", choices=["none", "cosine", "onecycle"])
     parser.add_argument("--min_lr", type=float, default=1e-6)
+    parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "adam", "sgd"])
     parser.add_argument("--class_weights", type=str, default="", help="Comma-separated class weights")
     parser.add_argument("--use_dice", action="store_true")
     parser.add_argument("--dice_weight", type=float, default=0.4)
@@ -385,8 +416,12 @@ def main():
     parser.add_argument("--use_context", action="store_true")
     parser.add_argument("--backbone", type=str, default="plain", choices=["plain", "residual"],
                         help="Encoder-decoder block type. residual keeps params under the fairness limit.")
+    parser.add_argument("--model_arch", type=str, default="miniunet", choices=["miniunet", "srresnet"])
+    parser.add_argument("--sr_num_blocks", type=int, default=16, help="Number of SRResNet residual blocks.")
+    parser.add_argument("--sr_upscale_factor", type=int, default=1, choices=[1, 2, 4, 8],
+                        help="SRResNet upscale factor. Use 1 for segmentation baseline.")
     parser.add_argument("--exp_preset", type=str, default="custom",
-                        choices=["baseline", "full_strong", "baseline4", "custom"])
+                        choices=["baseline", "full_strong", "baseline4", "srresnet_baseline", "custom"])
 
     # ---- Focal Loss ----
     parser.add_argument("--use_focal", action="store_true", help="Use Focal Loss instead of CrossEntropy")
@@ -489,15 +524,25 @@ def main():
                             num_workers=args.num_workers, pin_memory=True)
 
     # ----- model -----
-    model = MiniUNet(
-        num_classes=args.num_classes,
-        base_ch=model_cfg["base_ch"],
-        backbone=model_cfg["backbone"],
-        use_dsconv=model_cfg["use_dsconv"],
-        use_attention=model_cfg["use_attention"],
-        use_context=model_cfg["use_context"],
-        use_aux_head=model_cfg["use_aux_head"],
-    ).to(device)
+    model_arch = exp_cfg["model_arch"]
+    if model_arch == "miniunet":
+        model = MiniUNet(
+            num_classes=args.num_classes,
+            base_ch=model_cfg["base_ch"],
+            backbone=model_cfg["backbone"],
+            use_dsconv=model_cfg["use_dsconv"],
+            use_attention=model_cfg["use_attention"],
+            use_context=model_cfg["use_context"],
+            use_aux_head=model_cfg["use_aux_head"],
+        ).to(device)
+    else:
+        model = SRResNet(
+            in_channels=3,
+            out_channels=args.num_classes,
+            base_ch=model_cfg["base_ch"],
+            num_blocks=model_cfg["sr_num_blocks"],
+            upscale_factor=model_cfg["sr_upscale_factor"],
+        ).to(device)
 
     n_params = count_params(model)
     print(f"Model params: {n_params:,}")
@@ -525,12 +570,25 @@ def main():
 
     dice_criterion = DiceLoss()
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    if args.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    elif args.optimizer == "adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    else:
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4, nesterov=True)
 
     scheduler = None
     if args.scheduler == "cosine":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=args.epochs, eta_min=args.min_lr
+        )
+    elif args.scheduler == "onecycle":
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=args.lr,
+            epochs=args.epochs,
+            steps_per_epoch=max(1, len(train_loader)),
+            pct_start=0.1,
         )
 
     best_f1 = -1.0
@@ -546,7 +604,7 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
             out = model(imgs)
-            if model_cfg["use_aux_head"]:
+            if model_arch == "miniunet" and model_cfg["use_aux_head"]:
                 logits, aux = out
             else:
                 logits = out
@@ -564,6 +622,8 @@ def main():
 
             loss.backward()
             optimizer.step()
+            if scheduler is not None and args.scheduler == "onecycle":
+                scheduler.step()
 
             bs = imgs.size(0)
             running_loss += loss.item() * bs
@@ -598,7 +658,7 @@ def main():
             masks = masks.to(device, non_blocking=True)
 
             out = model(imgs)
-            logits = out[0] if model_cfg["use_aux_head"] else out
+            logits = out[0] if (model_arch == "miniunet" and model_cfg["use_aux_head"]) else out
 
             if first_batch is None:
                 first_batch = (imgs.detach(), masks.detach(), logits.detach())
@@ -619,7 +679,7 @@ def main():
 
         val_f1 = f1_sum / max(1, n_batches)
 
-        if scheduler is not None:
+        if scheduler is not None and args.scheduler != "onecycle":
             scheduler.step()
         current_lr = optimizer.param_groups[0]["lr"]
 

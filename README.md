@@ -33,3 +33,49 @@ python train.py \
 5. Keep `--scheduler cosine --min_lr 1e-6`.
 
 > Note: All options remain compatible with the fairness parameter cap guard in `train.py`.
+
+## New support: SRResNet baseline (actual SRResNet)
+
+You can now benchmark a real SRResNet baseline (residual trunk + optional PixelShuffle upsampling blocks):
+
+```bash
+python train.py \
+  --exp_preset srresnet_baseline \
+  --data_root data \
+  --split splits/train_split.json \
+  --epochs 80 \
+  --batch_size 4 \
+  --lr 3e-4 \
+  --optimizer adamw \
+  --scheduler cosine \
+  --use_hflip --use_affine --use_color_jitter
+```
+
+For custom SRResNet runs:
+
+```bash
+python train.py --exp_preset custom --model_arch srresnet --sr_num_blocks 16 --sr_upscale_factor 1
+```
+
+## New support: one-click strategy search
+
+Run a single command to search different presets + optimizers + schedulers + augmentation combinations and automatically report the best strategy:
+
+```bash
+python search_best_strategy.py \
+  --data_root data \
+  --split splits/train_split.json \
+  --epochs 20 \
+  --batch_size 4
+```
+
+Useful options:
+
+- `--max_trials 8`: quick sanity search
+- `--out_dir search_runs`: where logs/checkpoints/summary are saved
+
+The script writes:
+
+- per-trial logs under `search_runs/logs/`
+- per-trial checkpoints under `search_runs/ckpts/`
+- ranked summary file `search_runs/summary.json`
