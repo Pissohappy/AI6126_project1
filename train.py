@@ -18,6 +18,7 @@ from src.dataset import (
     JointResize,
     JointRandomHorizontalFlip,
     JointRandomAffine,
+    JointRandomCrop,
     JointColorJitter,
     ToTensorNormalize,
 )
@@ -104,6 +105,26 @@ class FocalLoss(nn.Module):
         return focal_loss.mean()
 
 
+class OHEMCrossEntropyLoss(nn.Module):
+    """Online Hard Example Mining Cross Entropy (pixel-wise)."""
+    def __init__(self, ignore_index: int = -1, min_kept_ratio: float = 0.25):
+        super().__init__()
+        self.ignore_index = ignore_index
+        self.min_kept_ratio = min_kept_ratio
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor):
+        ce = F.cross_entropy(logits, target, ignore_index=self.ignore_index, reduction="none")
+        if self.ignore_index >= 0:
+            valid = target != self.ignore_index
+            ce = ce[valid]
+        if ce.numel() == 0:
+            return logits.sum() * 0.0
+
+        k = max(1, int(ce.numel() * self.min_kept_ratio))
+        hard = torch.topk(ce, k=k, largest=True, sorted=False).values
+        return hard.mean()
+
+
 def compute_sample_weights(
     file_list: List[str],
     masks_dir: str,
@@ -142,6 +163,29 @@ def compute_sample_weights(
         weights.append(w)
 
     return weights
+
+
+def compute_class_weights_from_masks(
+    file_list: List[str],
+    masks_dir: str,
+    num_classes: int,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Compute inverse-frequency class weights from training masks."""
+    hist = np.zeros((num_classes,), dtype=np.float64)
+    for fname in file_list:
+        stem = os.path.splitext(fname)[0]
+        mask_path = os.path.join(masks_dir, stem + ".png")
+        if not os.path.exists(mask_path):
+            continue
+        mask = np.array(Image.open(mask_path), dtype=np.int64)
+        binc = np.bincount(mask.reshape(-1), minlength=num_classes)[:num_classes]
+        hist += binc
+
+    freq = hist / max(hist.sum(), eps)
+    inv = 1.0 / np.maximum(freq, eps)
+    inv = inv / np.mean(inv)
+    return torch.tensor(inv, dtype=torch.float32)
 
 
 def _maybe_init_wandb(args, model, n_params: int):
@@ -289,6 +333,56 @@ def log_confusion_matrix_wandb(cm: torch.Tensor, class_names, step: int, title: 
     plt.close(fig)
 
 
+@torch.no_grad()
+def infer_with_tta(model, imgs: torch.Tensor, use_tta: bool = False):
+    """Test-time augmentation with horizontal flip."""
+    if not use_tta:
+        out = model(imgs)
+        return out[0] if isinstance(out, (tuple, list)) else out
+
+    logits_raw = model(imgs)
+    logits = logits_raw[0] if isinstance(logits_raw, (tuple, list)) else logits_raw
+
+    imgs_flip = torch.flip(imgs, dims=[3])
+    logits_flip_raw = model(imgs_flip)
+    logits_flip = logits_flip_raw[0] if isinstance(logits_flip_raw, (tuple, list)) else logits_flip_raw
+    logits_flip = torch.flip(logits_flip, dims=[3])
+    return 0.5 * (logits + logits_flip)
+
+
+@torch.no_grad()
+def infer_with_slide(
+    model,
+    imgs: torch.Tensor,
+    num_classes: int,
+    crop_size: int,
+    stride: int,
+    use_tta: bool = False,
+):
+    """Slide-window inference for large images."""
+    b, _, h, w = imgs.shape
+    if crop_size <= 0 or crop_size >= min(h, w):
+        return infer_with_tta(model, imgs, use_tta=use_tta)
+
+    preds = torch.zeros((b, num_classes, h, w), device=imgs.device, dtype=torch.float32)
+    count = torch.zeros((b, 1, h, w), device=imgs.device, dtype=torch.float32)
+
+    ys = list(range(0, max(1, h - crop_size + 1), stride))
+    xs = list(range(0, max(1, w - crop_size + 1), stride))
+    if ys[-1] != h - crop_size:
+        ys.append(h - crop_size)
+    if xs[-1] != w - crop_size:
+        xs.append(w - crop_size)
+
+    for y in ys:
+        for x in xs:
+            crop = imgs[:, :, y:y + crop_size, x:x + crop_size]
+            logits = infer_with_tta(model, crop, use_tta=use_tta)
+            preds[:, :, y:y + crop_size, x:x + crop_size] += logits
+            count[:, :, y:y + crop_size, x:x + crop_size] += 1.0
+    return preds / count.clamp_min(1.0)
+
+
 def build_experiment_config(args):
     """Build a consistent experiment config from preset + CLI args."""
     presets = {
@@ -308,6 +402,7 @@ def build_experiment_config(args):
                 "use_dice": False,
                 "use_balanced_sampling": False,
                 "use_focal": False,
+                "use_ohem": False,
             },
         },
         "full_strong": {
@@ -326,6 +421,7 @@ def build_experiment_config(args):
                 "use_dice": True,
                 "use_balanced_sampling": True,
                 "use_focal": False,
+                "use_ohem": False,
             },
         },
         "baseline4": {
@@ -344,6 +440,7 @@ def build_experiment_config(args):
                 "use_dice": True,
                 "use_balanced_sampling": True,
                 "use_focal": True,
+                "use_ohem": False,
             },
         },
         "srresnet_baseline": {
@@ -362,6 +459,7 @@ def build_experiment_config(args):
                 "use_dice": False,
                 "use_balanced_sampling": False,
                 "use_focal": False,
+                "use_ohem": False,
             },
         },
         "custom": {
@@ -380,6 +478,7 @@ def build_experiment_config(args):
                 "use_dice": args.use_dice,
                 "use_balanced_sampling": args.use_balanced_sampling,
                 "use_focal": args.use_focal,
+                "use_ohem": args.use_ohem,
             },
         },
     }
@@ -400,15 +499,18 @@ def main():
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--ckpt_dir", type=str, default="checkpoints")
     parser.add_argument("--size", type=int, default=512)
+    parser.add_argument("--mean", type=str, default="0.5,0.5,0.5", help="Normalization mean (r,g,b)")
+    parser.add_argument("--std", type=str, default="0.5,0.5,0.5", help="Normalization std (r,g,b)")
     parser.add_argument("--use_hflip", action="store_true")
     parser.add_argument("--use_affine", action="store_true")
+    parser.add_argument("--use_random_crop", action="store_true", help="Use random crop in training pipeline")
+    parser.add_argument("--crop_size", type=int, default=448, help="Crop size for random crop / slide inference")
     parser.add_argument("--use_color_jitter", action="store_true")
     parser.add_argument("--scheduler", type=str, default="cosine", choices=["none", "cosine", "onecycle"])
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "adam", "sgd"])
     parser.add_argument("--class_weights", type=str, default="", help="Comma-separated class weights")
     parser.add_argument("--use_dice", action="store_true")
-    parser.add_argument("--dice_weight", type=float, default=0.4)
     parser.add_argument("--use_dsconv", action="store_true")
     parser.add_argument("--use_aux_head", action="store_true")
     parser.add_argument("--aux_weight", type=float, default=0.3)
@@ -428,6 +530,11 @@ def main():
     parser.add_argument("--focal_gamma", type=float, default=2.0, help="Focal loss gamma parameter")
     parser.add_argument("--label_smoothing", type=float, default=0.0,
                         help="Label smoothing for CrossEntropy (ignored when using focal loss)")
+    parser.add_argument("--use_ohem", action="store_true", help="Use OHEM CrossEntropy")
+    parser.add_argument("--ohem_kept_ratio", type=float, default=0.25, help="Keep top ratio hardest pixels in OHEM")
+    parser.add_argument("--ce_weight", type=float, default=1.0, help="Weight for CE/OHEM term")
+    parser.add_argument("--focal_weight", type=float, default=0.0, help="Weight for focal term")
+    parser.add_argument("--dice_weight", type=float, default=0.4)
 
     # ---- Balanced Sampling ----
     parser.add_argument("--use_balanced_sampling", action="store_true",
@@ -436,6 +543,13 @@ def main():
                         help="Comma-separated rare class ids to oversample (default: glasses,earring,neck,necklace)")
     parser.add_argument("--rare_weight", type=float, default=5.0,
                         help="Weight multiplier for samples containing rare classes")
+    parser.add_argument("--auto_class_weights", action="store_true",
+                        help="Auto-compute pixel-level class weights from train masks")
+
+    # ---- inference tricks ----
+    parser.add_argument("--use_tta", action="store_true", help="Enable flip TTA on validation/inference")
+    parser.add_argument("--slide_inference", action="store_true", help="Enable slide-window validation inference")
+    parser.add_argument("--slide_stride", type=int, default=224, help="Stride for slide-window inference")
 
     # ---- wandb ----
     parser.add_argument("--use_wandb", action="store_true")
@@ -459,6 +573,10 @@ def main():
     exp_cfg = build_experiment_config(args)
     model_cfg = exp_cfg["model"]
     train_cfg = exp_cfg["training"]
+    mean = tuple(float(x.strip()) for x in args.mean.split(",") if x.strip())
+    std = tuple(float(x.strip()) for x in args.std.split(",") if x.strip())
+    if len(mean) != 3 or len(std) != 3:
+        raise ValueError("--mean and --std must each contain 3 comma-separated values")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -473,18 +591,20 @@ def main():
 
     # ----- transforms -----
     train_tfms = [JointResize((args.size, args.size))]
+    if args.use_random_crop:
+        train_tfms.append(JointRandomCrop(size=(args.crop_size, args.crop_size), p=0.8))
     if args.use_hflip:
         train_tfms.append(JointRandomHorizontalFlip(p=0.5))
     if args.use_affine:
         train_tfms.append(JointRandomAffine(p=0.5))
     if args.use_color_jitter:
         train_tfms.append(JointColorJitter(p=0.5, brightness=0.12, contrast=0.12, saturation=0.12))
-    train_tfms.append(ToTensorNormalize())
+    train_tfms.append(ToTensorNormalize(mean=mean, std=std))
     train_joint = ComposeJoint(train_tfms)
 
     val_joint = ComposeJoint([
         JointResize((args.size, args.size)),
-        ToTensorNormalize(),
+        ToTensorNormalize(mean=mean, std=std),
     ])
 
     train_ds = FaceParsingDataset(
@@ -522,6 +642,11 @@ def main():
                               sampler=sampler, num_workers=args.num_workers, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
                             num_workers=args.num_workers, pin_memory=True)
+    if args.use_tta or args.slide_inference:
+        print(
+            f"Validation inference tricks: TTA={args.use_tta}, "
+            f"slide={args.slide_inference} (crop={args.crop_size}, stride={args.slide_stride})"
+        )
 
     # ----- model -----
     model_arch = exp_cfg["model_arch"]
@@ -554,21 +679,32 @@ def main():
 
     # ----- loss/optim -----
     class_weights = None
-    if args.class_weights:
+    if args.auto_class_weights:
+        class_weights = compute_class_weights_from_masks(
+            file_list=train_list,
+            masks_dir=train_masks,
+            num_classes=args.num_classes,
+        ).to(device)
+        print(f"Using auto class weights: {class_weights.detach().cpu().numpy().round(4).tolist()}")
+    elif args.class_weights:
         values = [float(x.strip()) for x in args.class_weights.split(",") if x.strip()]
         if len(values) != args.num_classes:
             raise ValueError(f"Expected {args.num_classes} class weights, got {len(values)}")
         class_weights = torch.tensor(values, dtype=torch.float32, device=device)
 
-    # Choose loss function
-    if train_cfg["use_focal"]:
-        criterion = FocalLoss(gamma=args.focal_gamma, alpha=class_weights)
+    ce_criterion = nn.CrossEntropyLoss(
+        weight=class_weights, label_smoothing=args.label_smoothing
+    )
+    focal_criterion = FocalLoss(gamma=args.focal_gamma, alpha=class_weights)
+    ohem_criterion = OHEMCrossEntropyLoss(min_kept_ratio=args.ohem_kept_ratio)
+    dice_criterion = DiceLoss()
+
+    if train_cfg["use_ohem"]:
+        print(f"Using OHEM CE (kept_ratio={args.ohem_kept_ratio})")
+    elif train_cfg["use_focal"] and args.focal_weight <= 0:
         print(f"Using Focal Loss with gamma={args.focal_gamma}")
     else:
-        criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=args.label_smoothing)
-        print(f"Using CrossEntropy Loss (label_smoothing={args.label_smoothing})")
-
-    dice_criterion = DiceLoss()
+        print("Using multi-loss joint: CE/OHEM + Focal + Dice (by configured weights)")
 
     if args.optimizer == "adamw":
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -610,14 +746,30 @@ def main():
                 logits = out
                 aux = None
 
-            loss = criterion(logits, masks)
+            if train_cfg["use_ohem"]:
+                base_loss = ohem_criterion(logits, masks)
+            elif train_cfg["use_focal"] and args.focal_weight <= 0:
+                base_loss = focal_criterion(logits, masks)
+            else:
+                base_loss = args.ce_weight * ce_criterion(logits, masks)
+                if args.focal_weight > 0 or train_cfg["use_focal"]:
+                    base_loss = base_loss + args.focal_weight * focal_criterion(logits, masks)
+
+            loss = base_loss
             if train_cfg["use_dice"]:
-                loss = (1 - args.dice_weight) * loss + args.dice_weight * dice_criterion(logits, masks)
+                loss = loss + args.dice_weight * dice_criterion(logits, masks)
 
             if aux is not None:
-                aux_loss = criterion(aux, masks)
+                if train_cfg["use_ohem"]:
+                    aux_loss = ohem_criterion(aux, masks)
+                elif train_cfg["use_focal"] and args.focal_weight <= 0:
+                    aux_loss = focal_criterion(aux, masks)
+                else:
+                    aux_loss = args.ce_weight * ce_criterion(aux, masks)
+                    if args.focal_weight > 0 or train_cfg["use_focal"]:
+                        aux_loss = aux_loss + args.focal_weight * focal_criterion(aux, masks)
                 if train_cfg["use_dice"]:
-                    aux_loss = (1 - args.dice_weight) * aux_loss + args.dice_weight * dice_criterion(aux, masks)
+                    aux_loss = aux_loss + args.dice_weight * dice_criterion(aux, masks)
                 loss = loss + args.aux_weight * aux_loss
 
             loss.backward()
@@ -657,8 +809,17 @@ def main():
             imgs = imgs.to(device, non_blocking=True)
             masks = masks.to(device, non_blocking=True)
 
-            out = model(imgs)
-            logits = out[0] if (model_arch == "miniunet" and model_cfg["use_aux_head"]) else out
+            if args.slide_inference:
+                logits = infer_with_slide(
+                    model=model,
+                    imgs=imgs,
+                    num_classes=args.num_classes,
+                    crop_size=args.crop_size,
+                    stride=args.slide_stride,
+                    use_tta=args.use_tta,
+                )
+            else:
+                logits = infer_with_tta(model, imgs, use_tta=args.use_tta)
 
             if first_batch is None:
                 first_batch = (imgs.detach(), masks.detach(), logits.detach())

@@ -1,5 +1,41 @@
 # AI6126 Project 1 (Face Parsing)
 
+## OpenMMLab-style training/inference tricks
+
+`train.py` now supports the following practical tricks (with configurable switches):
+
+- **OHEM**: `--use_ohem --ohem_kept_ratio 0.25`
+- **Multi-loss joint training**: CE/OHEM + Focal + Dice
+  - `--ce_weight`
+  - `--focal_weight`
+  - `--dice_weight` (enabled when preset/flag uses dice)
+- **Class balance**
+  - image-level balanced sampler: `--use_balanced_sampling --rare_classes ... --rare_weight ...`
+  - pixel-level auto class weights: `--auto_class_weights`
+- **More standard data pipeline**
+  - image normalization: `--mean 0.5,0.5,0.5 --std 0.5,0.5,0.5`
+  - optional random crop: `--use_random_crop --crop_size 448`
+- **TTA / slide inference (validation stage)**
+  - `--use_tta`
+  - `--slide_inference --crop_size 448 --slide_stride 224`
+
+### Example: enable all requested tricks
+
+```bash
+python train.py \
+  --exp_preset custom \
+  --model_arch miniunet \
+  --use_dsconv --use_attention --use_context --use_aux_head \
+  --use_ohem --ohem_kept_ratio 0.25 \
+  --use_dice --dice_weight 0.4 \
+  --use_focal --focal_weight 0.5 --focal_gamma 2.0 \
+  --use_balanced_sampling --rare_classes 3,14,15,16 --rare_weight 5.0 \
+  --auto_class_weights \
+  --use_hflip --use_affine --use_color_jitter --use_random_crop --crop_size 448 \
+  --mean 0.5,0.5,0.5 --std 0.5,0.5,0.5 \
+  --use_tta --slide_inference --slide_stride 224
+```
+
 ## New support: Baseline Network 4
 
 You can now run a `baseline4` preset that keeps the model **from scratch** (no pretrained weights) while enabling a stronger configuration under the fairness constraint (`< 1,821,085` trainable params checked in `train.py`).
