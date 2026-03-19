@@ -205,5 +205,50 @@ class MiniUNet(nn.Module):
         return logits, aux
 
 
+class SRResBlock(nn.Module):
+    """SRResNet-style residual block (BN kept for stable from-scratch training)."""
+    def __init__(self, channels: int):
+        super().__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.PReLU(num_parameters=channels),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+        )
+
+    def forward(self, x):
+        return x + self.body(x)
+
+
+class SRResNetSeg(nn.Module):
+    """
+    SRResNet-style baseline adapted for segmentation.
+    Keeps full-resolution feature processing and predicts per-pixel classes.
+    """
+    def __init__(self, num_classes: int = 19, base_ch: int = 32, num_blocks: int = 8):
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Conv2d(3, base_ch, kernel_size=9, padding=4),
+            nn.PReLU(num_parameters=base_ch),
+        )
+        self.body = nn.Sequential(*[SRResBlock(base_ch) for _ in range(num_blocks)])
+        self.trunk = nn.Sequential(
+            nn.Conv2d(base_ch, base_ch, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(base_ch),
+        )
+        self.seg_head = nn.Sequential(
+            nn.Conv2d(base_ch, base_ch, kernel_size=3, padding=1),
+            nn.PReLU(num_parameters=base_ch),
+            nn.Conv2d(base_ch, num_classes, kernel_size=1),
+        )
+
+    def forward(self, x):
+        shallow = self.head(x)
+        deep = self.body(shallow)
+        fused = shallow + self.trunk(deep)
+        return self.seg_head(fused)
+
+
 def count_params(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
