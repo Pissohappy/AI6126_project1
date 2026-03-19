@@ -1,0 +1,190 @@
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            4y45scyf5z6aiixv09e36ih0hxn36i55:
+                args:
+                    - --use_wandb
+                    - --wandb_project
+                    - face-parsing
+                    - --wandb_name
+                    - balanced_v1
+                    - --epochs
+                    - "80"
+                    - --batch_size
+                    - "8"
+                    - --lr
+                    - "2e-4"
+                    - --use_hflip
+                    - --use_affine
+                    - --use_color_jitter
+                    - --use_dice
+                    - --dice_weight
+                    - "0.5"
+                    - --use_aux_head
+                    - --aux_weight
+                    - "0.4"
+                    - --use_attention
+                    - --use_context
+                    - --scheduler
+                    - cosine
+                    - --class_weights
+                    - 1.0,1.0,2.0,5.0,5.0,5.0,3.0,3.0,2.5,3.0,3.0,2.5,2.0,1.0,3.0,8.0,100.0,1.5,1.5
+                    - --val_log_cm
+                    - --log_images
+                codePath: train.py
+                codePathLocal: train.py
+                cpu_count: 120
+                cpu_count_logical: 240
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "930334486528"
+                        used: "905028112384"
+                email: 844104036@qq.com
+                executable: /mnt/disk1/szchen/miniconda3/envs/playground/bin/python
+                git:
+                    commit: 8d6117a39d4a294bd24e43e8569bd7c8c9cdbac8
+                    remote: https://github.com/Pissohappy/AI6126_project1.git
+                gpu: NVIDIA H200
+                gpu_count: 8
+                gpu_nvidia:
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-450f981b-df43-3730-3ef5-03a076f8ed87
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-3dbc9c85-6ff8-4222-8208-764bba9d6b76
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-6eedc856-dcd0-a7d2-a378-016891b82ade
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-57397684-9e5d-c474-071e-96249c870c97
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-6227cf86-ee10-9025-ecd1-ca5fc20cae62
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-261365fc-9a80-09cb-cdec-6b7f20fc7049
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-01514d91-7959-98e6-7bd0-861ec4d98242
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "150754820096"
+                      name: NVIDIA H200
+                      uuid: GPU-d643f1ac-7569-f879-dbe2-9a74d96c7939
+                host: gpu-h200-106
+                memory:
+                    total: "2164010733568"
+                os: Linux-5.15.0-97-generic-x86_64-with-glibc2.35
+                program: /mnt/disk1/szchen/PlayGround/repo/AI6126_project1/train.py
+                python: CPython 3.12.0
+                root: wandb_logs
+                startedAt: "2026-03-17T09:25:25.833706Z"
+                writerId: 4y45scyf5z6aiixv09e36ih0hxn36i55
+        m: []
+        python_version: 3.12.0
+        t:
+            "1":
+                - 1
+                - 105
+            "2":
+                - 1
+                - 105
+            "3":
+                - 2
+                - 13
+                - 16
+                - 61
+            "4": 3.12.0
+            "5": 0.25.1
+            "12": 0.25.1
+            "13": linux-x86_64
+aux_weight:
+    value: 0.4
+batch_size:
+    value: 8
+ckpt_dir:
+    value: checkpoints
+class_weights:
+    value: 1.0,1.0,2.0,5.0,5.0,5.0,3.0,3.0,2.5,3.0,3.0,2.5,2.0,1.0,3.0,8.0,100.0,1.5,1.5
+data_root:
+    value: data
+dice_weight:
+    value: 0.5
+epochs:
+    value: 80
+log_freq:
+    value: 50
+log_images:
+    value: true
+lr:
+    value: 0.0002
+min_lr:
+    value: 1e-06
+model_params:
+    value: 1647718
+num_classes:
+    value: 19
+num_workers:
+    value: 2
+scheduler:
+    value: cosine
+size:
+    value: 512
+split:
+    value: splits/train_split.json
+train_log_every:
+    value: 50
+use_affine:
+    value: true
+use_attention:
+    value: true
+use_aux_head:
+    value: true
+use_color_jitter:
+    value: true
+use_context:
+    value: true
+use_dice:
+    value: true
+use_dsconv:
+    value: false
+use_hflip:
+    value: true
+use_wandb:
+    value: true
+val_log_cm:
+    value: true
+val_log_cm_max_items:
+    value: 200000
+wandb_artifact:
+    value: false
+wandb_entity:
+    value: ""
+wandb_mode:
+    value: online
+wandb_name:
+    value: balanced_v1
+wandb_project:
+    value: face-parsing
+wandb_tags:
+    value: ""
+wandb_watch:
+    value: none

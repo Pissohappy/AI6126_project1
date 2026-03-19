@@ -18,3 +18,8 @@ config: {'data_root': 'data', 'split': 'splits/train_split.json', 'num_classes':
 2026-03-17 17:25:27,362 INFO    MainThread:407097 [wandb_run.py:_redirect():2465] Redirects installed.
 2026-03-17 17:25:27,365 INFO    MainThread:407097 [wandb_init.py:init():1082] run started, returning control to user process
 2026-03-17 17:25:27,365 INFO    MainThread:407097 [wandb_run.py:_config_callback():1403] config_cb None None {'model_params': 1647718}
+2026-03-17 17:46:19,540 INFO    MainThread:407097 [wandb_run.py:_finish():2291] finishing run 844104036-ustc/face-parsing/nz4xacn5
+2026-03-17 17:46:19,540 INFO    MainThread:407097 [wandb_run.py:_atexit_cleanup():2490] got exitcode: 0
+2026-03-17 17:46:19,541 INFO    MainThread:407097 [wandb_run.py:_restore():2472] restore
+2026-03-17 17:46:19,541 INFO    MainThread:407097 [wandb_run.py:_restore():2478] restore done
+2026-03-17 17:46:21,314 INFO    MainThread:407097 [wandb_run.py:_footer_sync_info():3868] logging synced files

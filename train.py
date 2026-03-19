@@ -4,9 +4,12 @@ import json
 import os
 from typing import List, Optional
 
+import numpy as np
+from PIL import Image
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from src.dataset import (
     SegPaths,
@@ -54,6 +57,91 @@ class DiceLoss(nn.Module):
         union = probs.sum(dims) + target_one_hot.sum(dims)
         dice = (2 * intersection + self.smooth) / (union + self.smooth)
         return 1 - dice.mean()
+
+
+class FocalLoss(nn.Module):
+    """Focal Loss for handling class imbalance.
+
+    FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+
+    Args:
+        gamma: focusing parameter, higher gamma means more focus on hard examples
+        alpha: class weights (optional)
+        ignore_index: index to ignore in loss calculation
+    """
+    def __init__(self, gamma: float = 2.0, alpha: torch.Tensor = None, ignore_index: int = -1):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.ignore_index = ignore_index
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor):
+        """
+        Args:
+            logits: (B, C, H, W) raw predictions
+            target: (B, H, W) ground truth labels
+        """
+        ce_loss = F.cross_entropy(
+            logits, target,
+            weight=self.alpha,
+            ignore_index=self.ignore_index,
+            reduction='none'
+        )
+
+        # p_t = exp(-ce_loss) is the probability of the correct class
+        pt = torch.exp(-ce_loss)
+
+        # Focal term: (1 - p_t)^gamma
+        focal_term = (1 - pt) ** self.gamma
+
+        focal_loss = focal_term * ce_loss
+
+        # Mask out ignored indices
+        if self.ignore_index >= 0:
+            valid_mask = target != self.ignore_index
+            focal_loss = focal_loss[valid_mask]
+
+        return focal_loss.mean()
+
+
+def compute_sample_weights(
+    file_list: List[str],
+    masks_dir: str,
+    rare_classes: List[int] = None,
+    rare_weight: float = 5.0
+) -> List[float]:
+    """Compute sample weights for balanced sampling.
+
+    Samples containing rare classes get higher weights to oversample them.
+
+    Args:
+        file_list: list of image filenames
+        masks_dir: directory containing mask files
+        rare_classes: list of rare class ids to oversample
+        rare_weight: weight multiplier for samples containing rare classes
+
+    Returns:
+        List of sample weights
+    """
+    if rare_classes is None:
+        # Default rare classes based on data analysis
+        rare_classes = [3, 14, 15, 16]  # glasses, earring, neck, necklace
+
+    weights = []
+    for fname in file_list:
+        stem = os.path.splitext(fname)[0]
+        mask_path = os.path.join(masks_dir, stem + ".png")
+
+        if os.path.exists(mask_path):
+            mask = np.array(Image.open(mask_path))
+            # Check if any rare class exists in this mask
+            has_rare = any(c in mask for c in rare_classes)
+            w = rare_weight if has_rare else 1.0
+        else:
+            w = 1.0
+        weights.append(w)
+
+    return weights
 
 
 def _maybe_init_wandb(args, model, n_params: int):
@@ -200,6 +288,7 @@ def log_confusion_matrix_wandb(cm: torch.Tensor, class_names, step: int, title: 
     wandb.log({title: wandb.Image(fig)}, step=step)
     plt.close(fig)
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", type=str, default="data")
@@ -225,6 +314,18 @@ def main():
     parser.add_argument("--use_attention", action="store_true")
     parser.add_argument("--use_context", action="store_true")
 
+    # ---- Focal Loss ----
+    parser.add_argument("--use_focal", action="store_true", help="Use Focal Loss instead of CrossEntropy")
+    parser.add_argument("--focal_gamma", type=float, default=2.0, help="Focal loss gamma parameter")
+
+    # ---- Balanced Sampling ----
+    parser.add_argument("--use_balanced_sampling", action="store_true",
+                        help="Use WeightedRandomSampler to oversample images with rare classes")
+    parser.add_argument("--rare_classes", type=str, default="3,14,15,16",
+                        help="Comma-separated rare class ids to oversample (default: glasses,earring,neck,necklace)")
+    parser.add_argument("--rare_weight", type=float, default=5.0,
+                        help="Weight multiplier for samples containing rare classes")
+
     # ---- wandb ----
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="face-parsing")
@@ -240,7 +341,8 @@ def main():
     # ---- wandb logging granularity ----
     parser.add_argument("--train_log_every", type=int, default=50, help="log train metrics every N steps")
     parser.add_argument("--val_log_cm", action="store_true", help="log confusion matrix on val")
-    parser.add_argument("--val_log_cm_max_items", type=int, default=200000, help="(optional) max pixels if using y_true/y_pred list; not used in heatmap mode")
+    parser.add_argument("--val_log_cm_max_items", type=int, default=200000,
+                        help="(optional) max pixels if using y_true/y_pred list; not used in heatmap mode")
 
     args = parser.parse_args()
 
@@ -284,8 +386,26 @@ def main():
         return_name=False
     )
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.num_workers, pin_memory=True)
+    # ----- Balanced Sampling -----
+    sampler = None
+    shuffle = True
+    if args.use_balanced_sampling:
+        rare_classes = [int(x.strip()) for x in args.rare_classes.split(",") if x.strip()]
+        print(f"Using balanced sampling with rare classes: {rare_classes}, weight: {args.rare_weight}")
+        sample_weights = compute_sample_weights(
+            train_list, train_masks, rare_classes=rare_classes, rare_weight=args.rare_weight
+        )
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(train_list),
+            replacement=True
+        )
+        shuffle = False  # When using sampler, shuffle must be False
+        print(f"  Total samples: {len(train_list)}, "
+              f"rare samples: {sum(1 for w in sample_weights if w > 1.0)}")
+
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=shuffle,
+                              sampler=sampler, num_workers=args.num_workers, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
                             num_workers=args.num_workers, pin_memory=True)
 
@@ -315,7 +435,14 @@ def main():
             raise ValueError(f"Expected {args.num_classes} class weights, got {len(values)}")
         class_weights = torch.tensor(values, dtype=torch.float32, device=device)
 
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # Choose loss function
+    if args.use_focal:
+        criterion = FocalLoss(gamma=args.focal_gamma, alpha=class_weights)
+        print(f"Using Focal Loss with gamma={args.focal_gamma}")
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        print("Using CrossEntropy Loss")
+
     dice_criterion = DiceLoss()
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -377,7 +504,6 @@ def main():
 
         train_loss = running_loss / len(train_ds)
 
-        # # ---- val ----
         # ---- val ----
         model.eval()
         f1_sum = 0.0
@@ -397,7 +523,6 @@ def main():
             if first_batch is None:
                 first_batch = (imgs.detach(), masks.detach(), logits.detach())
 
-            # 你原来的 overall f1（macro/whatever 由你的实现决定）
             f1 = f1_score_multiclass(logits, masks, num_classes=args.num_classes, ignore_background=True)
             f1_sum += float(f1)
             n_batches += 1
@@ -408,33 +533,11 @@ def main():
                 pred=pred.detach().cpu(),
                 target=masks.detach().cpu(),
                 num_classes=args.num_classes,
-                ignore_index=-1,  # 如果你的 dataset 有 ignore_index，改成对应值
+                ignore_index=-1,
             )
             cm_total += cm
 
         val_f1 = f1_sum / max(1, n_batches)
-        # model.eval()
-        # f1_sum = 0.0
-        # n_batches = 0
-
-        # # 为了 log_images，缓存一小批
-        # first_batch = None
-
-        # for imgs, masks in val_loader:
-        #     imgs = imgs.to(device, non_blocking=True)
-        #     masks = masks.to(device, non_blocking=True)
-
-        #     out = model(imgs)
-        #     logits = out[0] if args.use_aux_head else out
-
-        #     if first_batch is None:
-        #         first_batch = (imgs.detach(), masks.detach(), logits.detach())
-
-        #     f1 = f1_score_multiclass(logits, masks, num_classes=args.num_classes, ignore_background=True)
-        #     f1_sum += float(f1)
-        #     n_batches += 1
-
-        # val_f1 = f1_sum / max(1, n_batches)
 
         if scheduler is not None:
             scheduler.step()
@@ -442,21 +545,6 @@ def main():
 
         print(f"Epoch {epoch:03d} | lr={current_lr:.6g} | train_loss={train_loss:.4f} | val_f1={val_f1:.4f}")
 
-        # ---- wandb log (per-epoch) ----
-        # if run is not None:
-        #     import wandb
-        #     wandb.log(
-        #         {
-        #             "epoch": epoch,
-        #             "lr": current_lr,
-        #             "train/loss": train_loss,
-        #             "val/f1": val_f1,
-        #         },
-        #         step=epoch,
-        #     )
-        #     if args.log_images and first_batch is not None:
-        #         imgs_b, masks_b, logits_b = first_batch
-        #         _log_val_images_wandb(run, imgs_b, masks_b, logits_b, num_classes=args.num_classes, max_items=4, step=epoch)
         # ---- wandb log (per-epoch) ----
         if run is not None:
             import wandb
@@ -479,8 +567,6 @@ def main():
 
                 prec, rec, f1c = per_class_f1_from_cm(cm_total)
 
-                # 如果你希望像 overall f1 一样忽略 background=0，这里也可以排除 0
-                # 你也可以不排除，看你的定义
                 f1_no_bg = f1c[1:].mean().item() if args.num_classes > 1 else f1c.mean().item()
 
                 log_dict = {"val/f1_no_bg_from_cm": float(f1_no_bg)}
