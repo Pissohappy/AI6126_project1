@@ -295,6 +295,7 @@ def build_experiment_config(args):
         "baseline": {
             "model": {
                 "base_ch": 32,
+                "backbone": "plain",
                 "use_dsconv": False,
                 "use_attention": False,
                 "use_context": False,
@@ -309,6 +310,7 @@ def build_experiment_config(args):
         "full_strong": {
             "model": {
                 "base_ch": 32,
+                "backbone": "plain",
                 "use_dsconv": True,
                 "use_attention": True,
                 "use_context": True,
@@ -320,9 +322,25 @@ def build_experiment_config(args):
                 "use_focal": False,
             },
         },
+        "baseline4": {
+            "model": {
+                "base_ch": 32,
+                "backbone": "residual",
+                "use_dsconv": True,
+                "use_attention": True,
+                "use_context": True,
+                "use_aux_head": True,
+            },
+            "training": {
+                "use_dice": True,
+                "use_balanced_sampling": True,
+                "use_focal": True,
+            },
+        },
         "custom": {
             "model": {
                 "base_ch": 32,
+                "backbone": args.backbone,
                 "use_dsconv": args.use_dsconv,
                 "use_attention": args.use_attention,
                 "use_context": args.use_context,
@@ -365,12 +383,16 @@ def main():
     parser.add_argument("--aux_weight", type=float, default=0.3)
     parser.add_argument("--use_attention", action="store_true")
     parser.add_argument("--use_context", action="store_true")
+    parser.add_argument("--backbone", type=str, default="plain", choices=["plain", "residual"],
+                        help="Encoder-decoder block type. residual keeps params under the fairness limit.")
     parser.add_argument("--exp_preset", type=str, default="custom",
-                        choices=["baseline", "full_strong", "custom"])
+                        choices=["baseline", "full_strong", "baseline4", "custom"])
 
     # ---- Focal Loss ----
     parser.add_argument("--use_focal", action="store_true", help="Use Focal Loss instead of CrossEntropy")
     parser.add_argument("--focal_gamma", type=float, default=2.0, help="Focal loss gamma parameter")
+    parser.add_argument("--label_smoothing", type=float, default=0.0,
+                        help="Label smoothing for CrossEntropy (ignored when using focal loss)")
 
     # ---- Balanced Sampling ----
     parser.add_argument("--use_balanced_sampling", action="store_true",
@@ -470,6 +492,7 @@ def main():
     model = MiniUNet(
         num_classes=args.num_classes,
         base_ch=model_cfg["base_ch"],
+        backbone=model_cfg["backbone"],
         use_dsconv=model_cfg["use_dsconv"],
         use_attention=model_cfg["use_attention"],
         use_context=model_cfg["use_context"],
@@ -497,8 +520,8 @@ def main():
         criterion = FocalLoss(gamma=args.focal_gamma, alpha=class_weights)
         print(f"Using Focal Loss with gamma={args.focal_gamma}")
     else:
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
-        print("Using CrossEntropy Loss")
+        criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=args.label_smoothing)
+        print(f"Using CrossEntropy Loss (label_smoothing={args.label_smoothing})")
 
     dice_criterion = DiceLoss()
 
