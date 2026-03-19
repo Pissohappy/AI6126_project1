@@ -21,7 +21,7 @@ from src.dataset import (
     JointColorJitter,
     ToTensorNormalize,
 )
-from src.model import MiniUNet, count_params
+from src.model import build_model, count_params
 from src.metrics import f1_score_multiclass
 
 
@@ -294,6 +294,12 @@ def main():
     parser.add_argument("--data_root", type=str, default="data")
     parser.add_argument("--split", type=str, default="splits/train_split.json")
     parser.add_argument("--num_classes", type=int, default=19)
+    parser.add_argument("--arch", type=str, default="mini_unet",
+                        choices=["mini_unet", "unet_mobilenetv2_tiny", "unet_shufflenetv2_tiny", "bisenetv2_tiny"])
+    parser.add_argument("--width_mult", type=float, default=0.5,
+                        help="width multiplier for unet_mobilenetv2_tiny (0.5 or 0.75)")
+    parser.add_argument("--semantic_scale", type=float, default=0.75,
+                        help="semantic branch scale for bisenetv2_tiny")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -345,6 +351,9 @@ def main():
                         help="(optional) max pixels if using y_true/y_pred list; not used in heatmap mode")
 
     args = parser.parse_args()
+
+    if args.arch != "mini_unet" and args.use_aux_head:
+        raise ValueError("--use_aux_head is only supported when --arch=mini_unet")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -410,19 +419,35 @@ def main():
                             num_workers=args.num_workers, pin_memory=True)
 
     # ----- model -----
-    model = MiniUNet(
-        num_classes=args.num_classes,
-        base_ch=32,
-        use_dsconv=args.use_dsconv,
-        use_attention=args.use_attention,
-        use_context=args.use_context,
-        use_aux_head=args.use_aux_head,
-    ).to(device)
+    model_kwargs = {
+        "pretrained": False,
+    }
+    if args.arch == "mini_unet":
+        model_kwargs.update(
+            {
+                "base_ch": 32,
+                "use_dsconv": args.use_dsconv,
+                "use_attention": args.use_attention,
+                "use_context": args.use_context,
+                "use_aux_head": args.use_aux_head,
+            }
+        )
+    elif args.arch == "unet_mobilenetv2_tiny":
+        model_kwargs["width_mult"] = args.width_mult
+    elif args.arch == "bisenetv2_tiny":
+        model_kwargs["semantic_scale"] = args.semantic_scale
+
+    model = build_model(args.arch, num_classes=args.num_classes, **model_kwargs).to(device)
 
     n_params = count_params(model)
-    print(f"Model params: {n_params:,}")
-    if n_params >= 1_821_085:
-        print("WARNING: parameter count exceeds limit!")
+    within_budget = n_params < 1_821_085
+    print(f"Architecture: {args.arch}")
+    print(f"Trainable params: {n_params:,}")
+    print(f"Within < 1,821,085: {within_budget}")
+    if not within_budget:
+        raise RuntimeError(
+            f"Model {args.arch} has {n_params:,} trainable params, exceeding 1,821,085. Training is blocked."
+        )
 
     # ----- wandb init -----
     run = _maybe_init_wandb(args, model, n_params)
