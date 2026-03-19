@@ -21,7 +21,7 @@ from src.dataset import (
     JointColorJitter,
     ToTensorNormalize,
 )
-from src.model import MiniUNet, SRResNetSeg, count_params
+from src.model import MiniUNet, SRResNet, count_params
 from src.metrics import f1_score_multiclass
 
 
@@ -301,7 +301,8 @@ def build_experiment_config(args):
                 "use_attention": False,
                 "use_context": False,
                 "use_aux_head": False,
-                "sr_num_blocks": 8,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
             },
             "training": {
                 "use_dice": False,
@@ -318,7 +319,8 @@ def build_experiment_config(args):
                 "use_attention": True,
                 "use_context": True,
                 "use_aux_head": True,
-                "sr_num_blocks": 8,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
             },
             "training": {
                 "use_dice": True,
@@ -335,7 +337,8 @@ def build_experiment_config(args):
                 "use_attention": True,
                 "use_context": True,
                 "use_aux_head": True,
-                "sr_num_blocks": 8,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
             },
             "training": {
                 "use_dice": True,
@@ -352,7 +355,8 @@ def build_experiment_config(args):
                 "use_attention": False,
                 "use_context": False,
                 "use_aux_head": False,
-                "sr_num_blocks": 8,
+                "sr_num_blocks": 16,
+                "sr_upscale_factor": 1,
             },
             "training": {
                 "use_dice": False,
@@ -370,6 +374,7 @@ def build_experiment_config(args):
                 "use_context": args.use_context,
                 "use_aux_head": args.use_aux_head,
                 "sr_num_blocks": args.sr_num_blocks,
+                "sr_upscale_factor": args.sr_upscale_factor,
             },
             "training": {
                 "use_dice": args.use_dice,
@@ -412,7 +417,9 @@ def main():
     parser.add_argument("--backbone", type=str, default="plain", choices=["plain", "residual"],
                         help="Encoder-decoder block type. residual keeps params under the fairness limit.")
     parser.add_argument("--model_arch", type=str, default="miniunet", choices=["miniunet", "srresnet"])
-    parser.add_argument("--sr_num_blocks", type=int, default=8, help="Number of SRResNet residual blocks.")
+    parser.add_argument("--sr_num_blocks", type=int, default=16, help="Number of SRResNet residual blocks.")
+    parser.add_argument("--sr_upscale_factor", type=int, default=1, choices=[1, 2, 4, 8],
+                        help="SRResNet upscale factor. Use 1 for segmentation baseline.")
     parser.add_argument("--exp_preset", type=str, default="custom",
                         choices=["baseline", "full_strong", "baseline4", "srresnet_baseline", "custom"])
 
@@ -529,10 +536,12 @@ def main():
             use_aux_head=model_cfg["use_aux_head"],
         ).to(device)
     else:
-        model = SRResNetSeg(
-            num_classes=args.num_classes,
+        model = SRResNet(
+            in_channels=3,
+            out_channels=args.num_classes,
             base_ch=model_cfg["base_ch"],
             num_blocks=model_cfg["sr_num_blocks"],
+            upscale_factor=model_cfg["sr_upscale_factor"],
         ).to(device)
 
     n_params = count_params(model)

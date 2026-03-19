@@ -34,9 +34,9 @@ python train.py \
 
 > Note: All options remain compatible with the fairness parameter cap guard in `train.py`.
 
-## New support: SRResNet baseline
+## New support: SRResNet baseline (actual SRResNet)
 
-You can now benchmark an SRResNet-style baseline:
+You can now benchmark a real SRResNet baseline (residual trunk + optional PixelShuffle upsampling blocks):
 
 ```bash
 python train.py \
@@ -54,7 +54,7 @@ python train.py \
 For custom SRResNet runs:
 
 ```bash
-python train.py --exp_preset custom --model_arch srresnet --sr_num_blocks 8
+python train.py --exp_preset custom --model_arch srresnet --sr_num_blocks 16 --sr_upscale_factor 1
 ```
 
 ## New support: one-click strategy search
