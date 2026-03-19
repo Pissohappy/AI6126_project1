@@ -289,6 +289,58 @@ def log_confusion_matrix_wandb(cm: torch.Tensor, class_names, step: int, title: 
     plt.close(fig)
 
 
+def build_experiment_config(args):
+    """Build a consistent experiment config from preset + CLI args."""
+    presets = {
+        "baseline": {
+            "model": {
+                "base_ch": 32,
+                "use_dsconv": False,
+                "use_attention": False,
+                "use_context": False,
+                "use_aux_head": False,
+            },
+            "training": {
+                "use_dice": False,
+                "use_balanced_sampling": False,
+                "use_focal": False,
+            },
+        },
+        "full_strong": {
+            "model": {
+                "base_ch": 32,
+                "use_dsconv": True,
+                "use_attention": True,
+                "use_context": True,
+                "use_aux_head": True,
+            },
+            "training": {
+                "use_dice": True,
+                "use_balanced_sampling": True,
+                "use_focal": False,
+            },
+        },
+        "custom": {
+            "model": {
+                "base_ch": 32,
+                "use_dsconv": args.use_dsconv,
+                "use_attention": args.use_attention,
+                "use_context": args.use_context,
+                "use_aux_head": args.use_aux_head,
+            },
+            "training": {
+                "use_dice": args.use_dice,
+                "use_balanced_sampling": args.use_balanced_sampling,
+                "use_focal": args.use_focal,
+            },
+        },
+    }
+
+    if args.exp_preset not in presets:
+        raise ValueError(f"Unknown exp preset: {args.exp_preset}")
+    return presets[args.exp_preset]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", type=str, default="data")
@@ -313,6 +365,8 @@ def main():
     parser.add_argument("--aux_weight", type=float, default=0.3)
     parser.add_argument("--use_attention", action="store_true")
     parser.add_argument("--use_context", action="store_true")
+    parser.add_argument("--exp_preset", type=str, default="custom",
+                        choices=["baseline", "full_strong", "custom"])
 
     # ---- Focal Loss ----
     parser.add_argument("--use_focal", action="store_true", help="Use Focal Loss instead of CrossEntropy")
@@ -345,6 +399,9 @@ def main():
                         help="(optional) max pixels if using y_true/y_pred list; not used in heatmap mode")
 
     args = parser.parse_args()
+    exp_cfg = build_experiment_config(args)
+    model_cfg = exp_cfg["model"]
+    train_cfg = exp_cfg["training"]
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -389,7 +446,7 @@ def main():
     # ----- Balanced Sampling -----
     sampler = None
     shuffle = True
-    if args.use_balanced_sampling:
+    if train_cfg["use_balanced_sampling"]:
         rare_classes = [int(x.strip()) for x in args.rare_classes.split(",") if x.strip()]
         print(f"Using balanced sampling with rare classes: {rare_classes}, weight: {args.rare_weight}")
         sample_weights = compute_sample_weights(
@@ -412,17 +469,17 @@ def main():
     # ----- model -----
     model = MiniUNet(
         num_classes=args.num_classes,
-        base_ch=32,
-        use_dsconv=args.use_dsconv,
-        use_attention=args.use_attention,
-        use_context=args.use_context,
-        use_aux_head=args.use_aux_head,
+        base_ch=model_cfg["base_ch"],
+        use_dsconv=model_cfg["use_dsconv"],
+        use_attention=model_cfg["use_attention"],
+        use_context=model_cfg["use_context"],
+        use_aux_head=model_cfg["use_aux_head"],
     ).to(device)
 
     n_params = count_params(model)
     print(f"Model params: {n_params:,}")
     if n_params >= 1_821_085:
-        print("WARNING: parameter count exceeds limit!")
+        raise RuntimeError(f"Model params {n_params:,} exceed limit 1,821,085. Abort for fairness.")
 
     # ----- wandb init -----
     run = _maybe_init_wandb(args, model, n_params)
@@ -436,7 +493,7 @@ def main():
         class_weights = torch.tensor(values, dtype=torch.float32, device=device)
 
     # Choose loss function
-    if args.use_focal:
+    if train_cfg["use_focal"]:
         criterion = FocalLoss(gamma=args.focal_gamma, alpha=class_weights)
         print(f"Using Focal Loss with gamma={args.focal_gamma}")
     else:
@@ -466,19 +523,19 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
             out = model(imgs)
-            if args.use_aux_head:
+            if model_cfg["use_aux_head"]:
                 logits, aux = out
             else:
                 logits = out
                 aux = None
 
             loss = criterion(logits, masks)
-            if args.use_dice:
+            if train_cfg["use_dice"]:
                 loss = (1 - args.dice_weight) * loss + args.dice_weight * dice_criterion(logits, masks)
 
             if aux is not None:
                 aux_loss = criterion(aux, masks)
-                if args.use_dice:
+                if train_cfg["use_dice"]:
                     aux_loss = (1 - args.dice_weight) * aux_loss + args.dice_weight * dice_criterion(aux, masks)
                 loss = loss + args.aux_weight * aux_loss
 
@@ -518,7 +575,7 @@ def main():
             masks = masks.to(device, non_blocking=True)
 
             out = model(imgs)
-            logits = out[0] if args.use_aux_head else out
+            logits = out[0] if model_cfg["use_aux_head"] else out
 
             if first_batch is None:
                 first_batch = (imgs.detach(), masks.detach(), logits.detach())
