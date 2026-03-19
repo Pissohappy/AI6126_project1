@@ -134,6 +134,44 @@ class JointRandomAffine:
         return img, mask
 
 
+class JointRandomCrop:
+    """Random crop for image/mask with optional padding when input is smaller."""
+    def __init__(self, size: Tuple[int, int], p: float = 0.5):
+        self.size = size  # (H, W)
+        self.p = p
+
+    def __call__(self, img: Image.Image, mask: Optional[Image.Image]):
+        if np.random.rand() >= self.p:
+            return img, mask
+
+        crop_h, crop_w = self.size
+        w, h = img.size
+
+        pad_w = max(0, crop_w - w)
+        pad_h = max(0, crop_h - h)
+        if pad_w > 0 or pad_h > 0:
+            new_w = w + pad_w
+            new_h = h + pad_h
+            img_np = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+            img_np[:h, :w] = np.array(img)
+            img = Image.fromarray(img_np)
+
+            if mask is not None:
+                mask_np = np.zeros((new_h, new_w), dtype=np.uint8)
+                mask_np[:h, :w] = np.array(mask)
+                mask = Image.fromarray(mask_np)
+
+            w, h = new_w, new_h
+
+        top = int(np.random.randint(0, h - crop_h + 1))
+        left = int(np.random.randint(0, w - crop_w + 1))
+        box = (left, top, left + crop_w, top + crop_h)
+        img = img.crop(box)
+        if mask is not None:
+            mask = mask.crop(box)
+        return img, mask
+
+
 class JointColorJitter:
     """Color jitter only for image, mask unchanged."""
     def __init__(
@@ -170,9 +208,15 @@ class ToTensorNormalize:
       - image: PIL RGB -> float tensor (C,H,W) in [0,1]
       - mask : PIL L   -> long tensor (H,W) with class ids
     """
+    def __init__(self, mean: Tuple[float, float, float] = (0.5, 0.5, 0.5),
+                 std: Tuple[float, float, float] = (0.5, 0.5, 0.5)):
+        self.mean = torch.tensor(mean, dtype=torch.float32).view(3, 1, 1)
+        self.std = torch.tensor(std, dtype=torch.float32).view(3, 1, 1)
+
     def __call__(self, img: Image.Image, mask: Optional[Image.Image]):
         img_np = np.array(img).astype(np.float32) / 255.0  # (H,W,3)
         img_t = torch.from_numpy(img_np).permute(2, 0, 1)  # (3,H,W)
+        img_t = (img_t - self.mean) / self.std.clamp_min(1e-6)
 
         if mask is None:
             return img_t, None
