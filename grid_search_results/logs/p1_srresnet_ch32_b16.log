@@ -1,0 +1,2 @@
+Model params: 363,859
+Using multi-loss joint: CE/OHEM + Focal + Dice (by configured weights)

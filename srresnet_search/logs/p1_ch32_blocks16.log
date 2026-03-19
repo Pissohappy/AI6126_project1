@@ -8,3 +8,22 @@ Epoch 003 | lr=0.000198238 | train_loss=1.1031 | val_f1=0.1556
   Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.1556)
 Epoch 004 | lr=0.000196874 | train_loss=1.0486 | val_f1=0.1634
   Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.1634)
+Epoch 005 | lr=0.00019513 | train_loss=1.0171 | val_f1=0.2147
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.2147)
+Epoch 006 | lr=0.000193013 | train_loss=0.9744 | val_f1=0.2218
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.2218)
+Epoch 007 | lr=0.00019053 | train_loss=0.9413 | val_f1=0.2352
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.2352)
+Epoch 008 | lr=0.000187693 | train_loss=0.9294 | val_f1=0.2683
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.2683)
+Epoch 009 | lr=0.000184511 | train_loss=0.8934 | val_f1=0.3000
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.3000)
+Epoch 010 | lr=0.000180997 | train_loss=0.8684 | val_f1=0.3036
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.3036)
+Epoch 011 | lr=0.000177166 | train_loss=0.8415 | val_f1=0.3326
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.3326)
+Epoch 012 | lr=0.000173032 | train_loss=0.8190 | val_f1=0.2985
+Epoch 013 | lr=0.000168612 | train_loss=0.8031 | val_f1=0.3404
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.3404)
+Epoch 014 | lr=0.000163924 | train_loss=0.7842 | val_f1=0.3448
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.3448)

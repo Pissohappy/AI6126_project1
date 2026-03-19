@@ -1,21 +1,26 @@
 #!/usr/bin/env python
 """
-SRResNet Grid Search Experiment Script
+Grid Search Experiment Script for Face Segmentation
 
-This script runs a phased grid search for SRResNet-based face segmentation.
+This script runs a phased grid search for face segmentation models.
 It supports:
+- Multiple architectures: MiniUNet (plain/residual) and SRResNet
 - Dual GPU parallel execution
 - Checkpoint/resume functionality
 - Phased search (each phase builds on the best config from previous phase)
+- Weights & Biases integration for experiment tracking
 
 Usage:
     python run_srresnet_experiments.py --epochs 50 --gpu_ids 1,3
     python run_srresnet_experiments.py --phase 1 --max_trials 2 --epochs 5  # Quick test
+    python run_srresnet_experiments.py --arch all  # Search all architectures
+    python run_srresnet_experiments.py --arch srresnet  # Only SRResNet
+    python run_srresnet_experiments.py --arch miniunet  # Only MiniUNet
+    python run_srresnet_experiments.py --use_wandb --wandb_project my-project  # Enable W&B
 """
 
 import argparse
 import csv
-import itertools
 import json
 import os
 import re
@@ -36,8 +41,17 @@ class ExperimentConfig:
     """Configuration for a single experiment."""
     phase: int
     name: str
+    # Architecture
+    model_arch: str = "srresnet"  # miniunet, srresnet
+    backbone: str = "plain"  # plain, residual (for miniunet)
     base_ch: int = 32
-    num_blocks: int = 16
+    num_blocks: int = 16  # sr_num_blocks for SRResNet
+    # MiniUNet specific
+    use_dsconv: bool = False
+    use_attention: bool = False
+    use_context: bool = False
+    use_aux_head: bool = False
+    # Training
     lr: float = 2e-4
     loss_type: str = "baseline"  # baseline, dice, focal, focal_dice, ohem_dice, focal_ohem_dice
     aug_flags: List[str] = field(default_factory=list)
@@ -50,6 +64,25 @@ class ExperimentConfig:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    def arch_name(self) -> str:
+        """Return a short architecture name for display."""
+        if self.model_arch == "srresnet":
+            return f"srresnet_ch{self.base_ch}_b{self.num_blocks}"
+        else:
+            flags = []
+            if self.backbone == "residual":
+                flags.append("res")
+            if self.use_dsconv:
+                flags.append("ds")
+            if self.use_attention:
+                flags.append("att")
+            if self.use_context:
+                flags.append("ctx")
+            if self.use_aux_head:
+                flags.append("aux")
+            suffix = "_".join(flags) if flags else "plain"
+            return f"miniunet_{suffix}"
+
 
 @dataclass
 class TrialResult:
@@ -60,6 +93,7 @@ class TrialResult:
     best_f1: float
     log_path: str
     ckpt_path: str
+    n_params: int = 0
     error_msg: str = ""
 
     def to_dict(self) -> dict:
@@ -128,9 +162,8 @@ class ExperimentRunner:
         cmd = [
             sys.executable, "train.py",
             "--exp_preset", "custom",
-            "--model_arch", "srresnet",
+            "--model_arch", config.model_arch,
             "--base_ch", str(config.base_ch),
-            "--sr_num_blocks", str(config.num_blocks),
             "--data_root", self.args.data_root,
             "--split", self.args.split,
             "--num_classes", str(self.args.num_classes),
@@ -140,6 +173,20 @@ class ExperimentRunner:
             "--size", str(config.size),
             "--num_workers", str(self.args.num_workers),
         ]
+
+        # Architecture-specific args
+        if config.model_arch == "srresnet":
+            cmd.extend(["--sr_num_blocks", str(config.num_blocks)])
+        else:  # miniunet
+            cmd.extend(["--backbone", config.backbone])
+            if config.use_dsconv:
+                cmd.append("--use_dsconv")
+            if config.use_attention:
+                cmd.append("--use_attention")
+            if config.use_context:
+                cmd.append("--use_context")
+            if config.use_aux_head:
+                cmd.append("--use_aux_head")
 
         # Loss type configuration
         if config.loss_type == "dice":
@@ -206,11 +253,16 @@ class ExperimentRunner:
                 )
 
             best_f1 = -1.0
+            n_params = 0
             with open(log_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 m = BEST_F1_PATTERN.search(content)
                 if m:
                     best_f1 = float(m.group(1))
+                # Extract param count
+                params_m = re.search(r"Model params: ([\d,]+)", content)
+                if params_m:
+                    n_params = int(params_m.group(1).replace(",", ""))
 
             result = TrialResult(
                 config=config,
@@ -219,10 +271,11 @@ class ExperimentRunner:
                 best_f1=best_f1,
                 log_path=log_path,
                 ckpt_path=os.path.join(ckpt_dir, "best.pth"),
+                n_params=n_params,
             )
 
-            status = "SUCCESS" if proc.return_code == 0 else "FAILED"
-            print(f"[GPU {gpu_id}] {status}: {run_name} -> f1={best_f1:.4f}")
+            status = "SUCCESS" if proc.returncode == 0 else "FAILED"
+            print(f"[GPU {gpu_id}] {status}: {run_name} -> f1={best_f1:.4f} params={n_params:,}")
 
         except subprocess.TimeoutExpired:
             result = TrialResult(
@@ -256,7 +309,6 @@ class ExperimentRunner:
     def run_phase_parallel(self, configs: List[ExperimentConfig]) -> List[TrialResult]:
         """Run multiple experiments in parallel across available GPUs."""
         results = []
-        pending = []
 
         # Filter out already completed configs
         new_configs = []
@@ -341,65 +393,146 @@ class ExperimentRunner:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                "phase", "name", "base_ch", "num_blocks", "lr", "loss_type",
-                "aug_flags", "balance_type", "inference_type", "best_f1", "return_code"
+                "phase", "name", "model_arch", "backbone", "base_ch", "num_blocks",
+                "use_dsconv", "use_attention", "use_context", "use_aux_head",
+                "lr", "loss_type", "aug_flags", "balance_type", "inference_type",
+                "best_f1", "n_params", "return_code"
             ])
             for phase, results in sorted(all_results.items()):
                 for r in results:
                     writer.writerow([
                         r.config.phase,
                         r.config.name,
+                        r.config.model_arch,
+                        r.config.backbone,
                         r.config.base_ch,
                         r.config.num_blocks,
+                        r.config.use_dsconv,
+                        r.config.use_attention,
+                        r.config.use_context,
+                        r.config.use_aux_head,
                         r.config.lr,
                         r.config.loss_type,
                         "|".join(r.config.aug_flags),
                         r.config.balance_type,
                         r.config.inference_type,
                         r.best_f1,
+                        r.n_params,
                         r.return_code,
                     ])
 
         print(f"Saved summary to {summary_path} and {csv_path}")
 
 
-def generate_phase_configs(phase: int, best_config: dict, epochs: int, batch_size: int) -> List[ExperimentConfig]:
+def generate_arch_configs(arch_filter: str) -> List[ExperimentConfig]:
+    """Generate architecture search configs based on filter."""
+    configs = []
+
+    if arch_filter in ("all", "srresnet"):
+        # SRResNet variants
+        for ch, nb in [(32, 12), (32, 16), (48, 12), (48, 16)]:
+            configs.append(ExperimentConfig(
+                phase=1,
+                name=f"srresnet_ch{ch}_b{nb}",
+                model_arch="srresnet",
+                base_ch=ch,
+                num_blocks=nb,
+            ))
+
+    if arch_filter in ("all", "miniunet"):
+        # MiniUNet variants - Quick search
+        # Baseline plain
+        configs.append(ExperimentConfig(
+            phase=1,
+            name="miniunet_plain",
+            model_arch="miniunet",
+            backbone="plain",
+            base_ch=32,
+        ))
+        # Residual backbone (important for parameter limit)
+        configs.append(ExperimentConfig(
+            phase=1,
+            name="miniunet_residual",
+            model_arch="miniunet",
+            backbone="residual",
+            base_ch=32,
+        ))
+        # With attention
+        configs.append(ExperimentConfig(
+            phase=1,
+            name="miniunet_res_att",
+            model_arch="miniunet",
+            backbone="residual",
+            base_ch=32,
+            use_attention=True,
+        ))
+        # With dsconv + attention (efficient)
+        configs.append(ExperimentConfig(
+            phase=1,
+            name="miniunet_res_ds_att",
+            model_arch="miniunet",
+            backbone="residual",
+            base_ch=32,
+            use_dsconv=True,
+            use_attention=True,
+        ))
+        # Full strong config
+        configs.append(ExperimentConfig(
+            phase=1,
+            name="miniunet_res_ds_att_ctx_aux",
+            model_arch="miniunet",
+            backbone="residual",
+            base_ch=32,
+            use_dsconv=True,
+            use_attention=True,
+            use_context=True,
+            use_aux_head=True,
+        ))
+
+    return configs
+
+
+def generate_phase_configs(phase: int, best_config: dict, epochs: int, batch_size: int,
+                          arch_filter: str = "all") -> List[ExperimentConfig]:
     """Generate experiment configs for a specific phase."""
     configs = []
 
     # Extract base settings from best config
+    model_arch = best_config.get("model_arch", "srresnet")
+    backbone = best_config.get("backbone", "plain")
     base_ch = best_config.get("base_ch", 32)
     num_blocks = best_config.get("num_blocks", 16)
+    use_dsconv = best_config.get("use_dsconv", False)
+    use_attention = best_config.get("use_attention", False)
+    use_context = best_config.get("use_context", False)
+    use_aux_head = best_config.get("use_aux_head", False)
     lr = best_config.get("lr", 2e-4)
     loss_type = best_config.get("loss_type", "baseline")
     aug_flags = best_config.get("aug_flags", [])
     balance_type = best_config.get("balance_type", "none")
 
     if phase == 1:
-        # Phase 1: Architecture search (base_ch: 32/48, num_blocks: 12/16)
-        for ch, nb in [(32, 12), (32, 16), (48, 12), (48, 16)]:
-            configs.append(ExperimentConfig(
-                phase=phase,
-                name=f"ch{ch}_blocks{nb}",
-                base_ch=ch,
-                num_blocks=nb,
-                lr=lr,
-                loss_type=loss_type,
-                aug_flags=aug_flags.copy(),
-                balance_type=balance_type,
-                inference_type="baseline",
-                epochs=epochs,
-                batch_size=batch_size,
-            ))
+        # Phase 1: Architecture search
+        configs = generate_arch_configs(arch_filter)
+        # Set epochs and batch_size
+        for cfg in configs:
+            cfg.epochs = epochs
+            cfg.batch_size = batch_size
 
     elif phase == 2:
         # Phase 2: Learning rate search
         for lr_val in [1e-4, 2e-4, 3e-4]:
             configs.append(ExperimentConfig(
                 phase=phase,
-                name=f"lr{lr_val:.0e}".replace("-", "m"),
+                name=f"lr{lr_val:.0e}".replace("-", "m").replace("e0", ""),
+                model_arch=model_arch,
+                backbone=backbone,
                 base_ch=base_ch,
                 num_blocks=num_blocks,
+                use_dsconv=use_dsconv,
+                use_attention=use_attention,
+                use_context=use_context,
+                use_aux_head=use_aux_head,
                 lr=lr_val,
                 loss_type=loss_type,
                 aug_flags=aug_flags.copy(),
@@ -416,8 +549,14 @@ def generate_phase_configs(phase: int, best_config: dict, epochs: int, batch_siz
             configs.append(ExperimentConfig(
                 phase=phase,
                 name=f"loss_{lt}",
+                model_arch=model_arch,
+                backbone=backbone,
                 base_ch=base_ch,
                 num_blocks=num_blocks,
+                use_dsconv=use_dsconv,
+                use_attention=use_attention,
+                use_context=use_context,
+                use_aux_head=use_aux_head,
                 lr=lr,
                 loss_type=lt,
                 aug_flags=aug_flags.copy(),
@@ -440,8 +579,14 @@ def generate_phase_configs(phase: int, best_config: dict, epochs: int, batch_siz
             configs.append(ExperimentConfig(
                 phase=phase,
                 name=f"aug_{name}",
+                model_arch=model_arch,
+                backbone=backbone,
                 base_ch=base_ch,
                 num_blocks=num_blocks,
+                use_dsconv=use_dsconv,
+                use_attention=use_attention,
+                use_context=use_context,
+                use_aux_head=use_aux_head,
                 lr=lr,
                 loss_type=loss_type,
                 aug_flags=flags,
@@ -458,8 +603,14 @@ def generate_phase_configs(phase: int, best_config: dict, epochs: int, batch_siz
             configs.append(ExperimentConfig(
                 phase=phase,
                 name=f"balance_{bt}",
+                model_arch=model_arch,
+                backbone=backbone,
                 base_ch=base_ch,
                 num_blocks=num_blocks,
+                use_dsconv=use_dsconv,
+                use_attention=use_attention,
+                use_context=use_context,
+                use_aux_head=use_aux_head,
                 lr=lr,
                 loss_type=loss_type,
                 aug_flags=aug_flags.copy(),
@@ -476,8 +627,14 @@ def generate_phase_configs(phase: int, best_config: dict, epochs: int, batch_siz
             configs.append(ExperimentConfig(
                 phase=phase,
                 name=f"infer_{it}",
+                model_arch=model_arch,
+                backbone=backbone,
                 base_ch=base_ch,
                 num_blocks=num_blocks,
+                use_dsconv=use_dsconv,
+                use_attention=use_attention,
+                use_context=use_context,
+                use_aux_head=use_aux_head,
                 lr=lr,
                 loss_type=loss_type,
                 aug_flags=aug_flags.copy(),
@@ -498,20 +655,27 @@ def find_best_result(results: List[TrialResult]) -> Tuple[Optional[TrialResult],
 
     best = max(successful, key=lambda r: r.best_f1)
     best_config = {
+        "model_arch": best.config.model_arch,
+        "backbone": best.config.backbone,
         "base_ch": best.config.base_ch,
         "num_blocks": best.config.num_blocks,
+        "use_dsconv": best.config.use_dsconv,
+        "use_attention": best.config.use_attention,
+        "use_context": best.config.use_context,
+        "use_aux_head": best.config.use_aux_head,
         "lr": best.config.lr,
         "loss_type": best.config.loss_type,
         "aug_flags": best.config.aug_flags,
         "balance_type": best.config.balance_type,
         "inference_type": best.config.inference_type,
         "best_f1": best.best_f1,
+        "n_params": best.n_params,
     }
     return best, best_config
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SRResNet Grid Search Experiments")
+    parser = argparse.ArgumentParser(description="Grid Search Experiments for Face Segmentation")
     parser.add_argument("--data_root", type=str, default="data")
     parser.add_argument("--split", type=str, default="splits/train_split.json")
     parser.add_argument("--num_classes", type=int, default=19)
@@ -519,18 +683,22 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--size", type=int, default=512)
-    parser.add_argument("--out_dir", type=str, default="srresnet_search")
+    parser.add_argument("--out_dir", type=str, default="grid_search_results")
     parser.add_argument("--gpu_ids", type=str, default="1,3", help="Comma-separated GPU IDs to use")
+    parser.add_argument("--arch", type=str, default="all",
+                        choices=["all", "srresnet", "miniunet"],
+                        help="Architecture to search: all, srresnet, or miniunet")
     parser.add_argument("--phase", type=int, default=0, help="Phase to run (0=all, 1-6=specific)")
     parser.add_argument("--max_trials", type=int, default=0, help="Max trials per phase (0=unlimited)")
     parser.add_argument("--resume", action="store_true", help="Resume from previous run")
     args = parser.parse_args()
 
     print("=" * 60)
-    print("SRResNet Grid Search Experiment")
+    print("Grid Search Experiment for Face Segmentation")
     print("=" * 60)
     print(f"Output directory: {args.out_dir}")
     print(f"GPUs: {args.gpu_ids}")
+    print(f"Architecture filter: {args.arch}")
     print(f"Epochs per experiment: {args.epochs}")
     print(f"Phase: {args.phase if args.phase > 0 else 'all'}")
     print("=" * 60)
@@ -540,14 +708,21 @@ def main():
 
     # Default best config (baseline)
     best_config = {
+        "model_arch": "srresnet",
+        "backbone": "plain",
         "base_ch": 32,
         "num_blocks": 16,
+        "use_dsconv": False,
+        "use_attention": False,
+        "use_context": False,
+        "use_aux_head": False,
         "lr": 2e-4,
         "loss_type": "baseline",
         "aug_flags": [],
         "balance_type": "none",
         "inference_type": "baseline",
         "best_f1": 0.0,
+        "n_params": 0,
     }
 
     # Load best config from previous phases if resuming
@@ -571,7 +746,7 @@ def main():
         print(f"{'=' * 60}")
 
         # Generate configs for this phase
-        configs = generate_phase_configs(phase, best_config, args.epochs, args.batch_size)
+        configs = generate_phase_configs(phase, best_config, args.epochs, args.batch_size, args.arch)
         print(f"Generated {len(configs)} configs for phase {phase}")
 
         # Run experiments
@@ -583,6 +758,8 @@ def main():
         if best_result:
             best_config = new_best_config
             print(f"\nPhase {phase} best: {best_result.config.name} -> f1={best_result.best_f1:.4f}")
+            print(f"  Architecture: {best_result.config.arch_name()}")
+            print(f"  Params: {best_result.n_params:,}")
         else:
             print(f"\nPhase {phase} failed: no successful experiments")
 
