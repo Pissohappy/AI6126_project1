@@ -48,11 +48,26 @@ class DoubleConv(nn.Module):
         return self.net(x)
 
 
-class Down(nn.Module):
+class ResidualDoubleConv(nn.Module):
+    """Residual variant of DoubleConv (from scratch, no pretrain)."""
     def __init__(self, in_ch: int, out_ch: int, use_dsconv: bool = False):
         super().__init__()
+        conv_layer = DSConvBNReLU if use_dsconv else ConvBNReLU
+        self.body = nn.Sequential(
+            conv_layer(in_ch, out_ch),
+            conv_layer(out_ch, out_ch),
+        )
+        self.proj = nn.Identity() if in_ch == out_ch else nn.Conv2d(in_ch, out_ch, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        return self.body(x) + self.proj(x)
+
+
+class Down(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, use_dsconv: bool = False, block_cls=DoubleConv):
+        super().__init__()
         self.pool = nn.MaxPool2d(2)
-        self.conv = DoubleConv(in_ch, out_ch, use_dsconv=use_dsconv)
+        self.conv = block_cls(in_ch, out_ch, use_dsconv=use_dsconv)
 
     def forward(self, x):
         x = self.pool(x)
@@ -61,14 +76,14 @@ class Down(nn.Module):
 
 
 class Up(nn.Module):
-    def __init__(self, in_ch: int, skip_ch: int, out_ch: int, use_dsconv: bool = False):
+    def __init__(self, in_ch: int, skip_ch: int, out_ch: int, use_dsconv: bool = False, block_cls=DoubleConv):
         """
         in_ch: channels of the feature being upsampled (from deeper layer)
         skip_ch: channels from skip connection
         out_ch: output channels after fusion conv
         """
         super().__init__()
-        self.conv = DoubleConv(in_ch + skip_ch, out_ch, use_dsconv=use_dsconv)
+        self.conv = block_cls(in_ch + skip_ch, out_ch, use_dsconv=use_dsconv)
 
     def forward(self, x, skip):
         x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
@@ -137,6 +152,7 @@ class MiniUNet(nn.Module):
             use_attention: bool = False,
             use_context: bool = False,
             use_aux_head: bool = False,
+            backbone: str = "plain",
         ):
         super().__init__()
         c1 = base_ch
@@ -145,19 +161,20 @@ class MiniUNet(nn.Module):
         c4 = base_ch * 6
 
         self.use_aux_head = use_aux_head
+        block_cls = ResidualDoubleConv if backbone == "residual" else DoubleConv
 
-        self.stem = DoubleConv(3, c1, use_dsconv=False)
-        self.down1 = Down(c1, c2, use_dsconv=use_dsconv)
-        self.down2 = Down(c2, c3, use_dsconv=use_dsconv)
-        self.down3 = Down(c3, c4, use_dsconv=use_dsconv)
+        self.stem = block_cls(3, c1, use_dsconv=False)
+        self.down1 = Down(c1, c2, use_dsconv=use_dsconv, block_cls=block_cls)
+        self.down2 = Down(c2, c3, use_dsconv=use_dsconv, block_cls=block_cls)
+        self.down3 = Down(c3, c4, use_dsconv=use_dsconv, block_cls=block_cls)
 
 
         self.context = PPMLite(c4) if use_context else nn.Identity()
         self.attn_deep = SEAttention(c4) if use_attention else nn.Identity()
 
-        self.up2 = Up(c4, c3, c3, use_dsconv=use_dsconv)   # 192 + 128 -> 128
-        self.up1 = Up(c3, c2, c2, use_dsconv=use_dsconv)   # 128 + 64  -> 64
-        self.up0 = Up(c2, c1, c1, use_dsconv=use_dsconv)   # 64  + 32  -> 32
+        self.up2 = Up(c4, c3, c3, use_dsconv=use_dsconv, block_cls=block_cls)   # 192 + 128 -> 128
+        self.up1 = Up(c3, c2, c2, use_dsconv=use_dsconv, block_cls=block_cls)   # 128 + 64  -> 64
+        self.up0 = Up(c2, c1, c1, use_dsconv=use_dsconv, block_cls=block_cls)   # 64  + 32  -> 32
 
         self.attn_shallow = SEAttention(c2) if use_attention else nn.Identity()
         
