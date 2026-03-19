@@ -1,0 +1,10 @@
+Model params: 363,859
+Using multi-loss joint: CE/OHEM + Focal + Dice (by configured weights)
+Epoch 001 | lr=0.000199804 | train_loss=1.3957 | val_f1=0.1097
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.1097)
+Epoch 002 | lr=0.000199215 | train_loss=1.1708 | val_f1=0.1320
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.1320)
+Epoch 003 | lr=0.000198238 | train_loss=1.1031 | val_f1=0.1556
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.1556)
+Epoch 004 | lr=0.000196874 | train_loss=1.0486 | val_f1=0.1634
+  Saved best checkpoint: srresnet_search/ckpts/p1_ch32_blocks16/best.pth (best_f1=0.1634)

@@ -465,7 +465,7 @@ def build_experiment_config(args):
         "custom": {
             "model_arch": args.model_arch,
             "model": {
-                "base_ch": 32,
+                "base_ch": args.base_ch,
                 "backbone": args.backbone,
                 "use_dsconv": args.use_dsconv,
                 "use_attention": args.use_attention,
@@ -519,6 +519,7 @@ def main():
     parser.add_argument("--backbone", type=str, default="plain", choices=["plain", "residual"],
                         help="Encoder-decoder block type. residual keeps params under the fairness limit.")
     parser.add_argument("--model_arch", type=str, default="miniunet", choices=["miniunet", "srresnet"])
+    parser.add_argument("--base_ch", type=int, default=32, help="Base channel count for model.")
     parser.add_argument("--sr_num_blocks", type=int, default=16, help="Number of SRResNet residual blocks.")
     parser.add_argument("--sr_upscale_factor", type=int, default=1, choices=[1, 2, 4, 8],
                         help="SRResNet upscale factor. Use 1 for segmentation baseline.")
